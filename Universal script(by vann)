@@ -1,0 +1,291 @@
+-- ADMIN PANEL | Delta Executor
+local P = game:GetService("Players")
+local RS = game:GetService("RunService")
+local UIS = game:GetService("UserInputService")
+local LP = P.LocalPlayer
+local CAM = workspace.CurrentCamera
+
+local S = {Fly=false,Noclip=false,ESP=false,Speed=false,InfJump=false,FreeCam=false}
+local FlySpd, WalkSpd, CamSpd = 50, 50, 50
+local HL = {}
+local CamPos, OrigCam = nil, CAM.CameraType
+
+-- Helper UI
+local function mk(cls,props,par)
+    local o = Instance.new(cls)
+    for k,v in pairs(props) do o[k]=v end
+    o.Parent = par
+    return o
+end
+local function corner(o,r) mk("UICorner",{CornerRadius=UDim.new(0,r or 6)},o) end
+local function lbl(par,txt,props)
+    local l = mk("TextLabel",props or {},par)
+    l.Text=txt l.Font=Enum.Font.GothamBold l.TextColor3=Color3.new(1,1,1) l.BackgroundTransparency=1
+    return l
+end
+local function btn(par,txt,props)
+    local b = mk("TextButton",props or {},par)
+    b.Text=txt b.Font=Enum.Font.GothamBold b.TextSize=13
+    b.TextColor3=Color3.new(1,1,1) b.BackgroundColor3=Color3.fromRGB(45,45,60) b.BorderSizePixel=0
+    corner(b) return b
+end
+
+-- Draggable
+local function drag(f, target)
+    target = target or f
+    local d,ds,dp = false,nil,nil
+    target.InputBegan:Connect(function(i)
+        if i.UserInputType==Enum.UserInputType.MouseButton1 or i.UserInputType==Enum.UserInputType.Touch then
+            d=true ds=i.Position dp=f.Position
+            i.Changed:Connect(function() if i.UserInputState==Enum.UserInputState.End then d=false end end)
+        end
+    end)
+    UIS.InputChanged:Connect(function(i)
+        if d and (i.UserInputType==Enum.UserInputType.MouseMovement or i.UserInputType==Enum.UserInputType.Touch) then
+            local dl=i.Position-ds
+            f.Position=UDim2.new(dp.X.Scale,dp.X.Offset+dl.X,dp.Y.Scale,dp.Y.Offset+dl.Y)
+        end
+    end)
+end
+
+-- Floating button (bisa digeser)
+local function floatBtn(name, txt, pos, cb)
+    local g = mk("ScreenGui",{Name=name,ResetOnSpawn=false},game.CoreGui)
+    local f = mk("Frame",{Size=UDim2.new(0,130,0,40),Position=pos,BackgroundColor3=Color3.fromRGB(30,30,45),BorderSizePixel=0},g)
+    corner(f,8)
+    lbl(f,txt,{Size=UDim2.new(0,75,1,0),Position=UDim2.new(0,8,0,0),TextXAlignment=Enum.TextXAlignment.Left})
+    local b = btn(f,"OFF",{Size=UDim2.new(0,40,0,24),Position=UDim2.new(1,-46,0.5,-12),BackgroundColor3=Color3.fromRGB(200,50,50),TextSize=11})
+    drag(f,f)
+    local st = false
+    local function upd(v)
+        st=v b.Text=v and "ON" or "OFF" b.BackgroundColor3=v and Color3.fromRGB(50,200,80) or Color3.fromRGB(200,50,50) cb(v)
+    end
+    b.MouseButton1Click:Connect(function() upd(not st) end)
+    return {Set=upd}
+end
+
+-- ESP
+local function teamClr(pl)
+    if not pl.Team then return Color3.fromRGB(255,255,255) end
+    return pl.Team==LP.Team and Color3.fromRGB(0,255,0) or Color3.fromRGB(255,0,0)
+end
+local function updESP()
+    for _,pl in pairs(P:GetPlayers()) do
+        if pl==LP then continue end
+        local c = pl.Character
+        if c and c:FindFirstChild("HumanoidRootPart") then
+            if not HL[pl] or not HL[pl].Adornee then
+                local h = mk("Highlight",{FillTransparency=1,OutlineTransparency=0,DepthMode=Enum.HighlightDepthMode.AlwaysOnTop,Adornee=c,Parent=game.CoreGui},nil)
+                HL[pl]=h
+            end
+            HL[pl].Adornee=c HL[pl].OutlineColor=teamClr(pl) HL[pl].Enabled=S.ESP
+        elseif HL[pl] then HL[pl]:Destroy() HL[pl]=nil end
+    end
+end
+RS.Heartbeat:Connect(function() if S.ESP then updESP() end end)
+
+-- Fly
+local flyConn, flyBV, flyBG
+local function startFly()
+    local c=LP.Character if not c then return end
+    local hrp=c:FindFirstChild("HumanoidRootPart") if not hrp then return end
+    flyBV=mk("BodyVelocity",{MaxForce=Vector3.new(1e5,1e5,1e5),Velocity=Vector3.zero},hrp)
+    flyBG=mk("BodyGyro",{MaxTorque=Vector3.new(1e5,1e5,1e5),P=1e4},hrp)
+    flyConn=RS.RenderStepped:Connect(function()
+        if not S.Fly then return end
+        local md=Vector3.zero
+        if UIS:IsKeyDown(Enum.KeyCode.W) then md+=CAM.CFrame.LookVector end
+        if UIS:IsKeyDown(Enum.KeyCode.S) then md-=CAM.CFrame.LookVector end
+        if UIS:IsKeyDown(Enum.KeyCode.A) then md-=CAM.CFrame.RightVector end
+        if UIS:IsKeyDown(Enum.KeyCode.D) then md+=CAM.CFrame.RightVector end
+        if UIS:IsKeyDown(Enum.KeyCode.Space) then md+=Vector3.new(0,1,0) end
+        if UIS:IsKeyDown(Enum.KeyCode.LeftControl) then md-=Vector3.new(0,1,0) end
+        if md.Magnitude>0 then md=md.Unit end
+        flyBV.Velocity=md*FlySpd flyBG.CFrame=CAM.CFrame
+    end)
+end
+local function stopFly()
+    if flyConn then flyConn:Disconnect() flyConn=nil end
+    if flyBV then flyBV:Destroy() flyBV=nil end
+    if flyBG then flyBG:Destroy() flyBG=nil end
+end
+
+-- Noclip
+local ncConn
+local function startNC()
+    ncConn=RS.Stepped:Connect(function()
+        if S.Noclip and LP.Character then
+            for _,p in pairs(LP.Character:GetDescendants()) do
+                if p:IsA("BasePart") then p.CanCollide=false end
+            end
+        end
+    end)
+end
+local function stopNC()
+    if ncConn then ncConn:Disconnect() ncConn=nil end
+    if LP.Character then
+        for _,p in pairs(LP.Character:GetDescendants()) do
+            if p:IsA("BasePart") then pcall(function() p.CanCollide=true end) end
+        end
+    end
+end
+
+-- Speed
+local function setSpd(v)
+    local c=LP.Character if not c then return end
+    local h=c:FindFirstChildOfClass("Humanoid") if h then h.WalkSpeed=v and WalkSpd or 16 end
+end
+
+-- Infinite Jump
+UIS.JumpRequest:Connect(function()
+    if S.InfJump and LP.Character then
+        local h=LP.Character:FindFirstChildOfClass("Humanoid")
+        if h then h:ChangeState(Enum.HumanoidStateType.Jumping) end
+    end
+end)
+
+-- Free Cam
+local fcConn
+local function startFC()
+    local c=LP.Character if not c then return end
+    local hrp=c:FindFirstChild("HumanoidRootPart") if not hrp then return end
+    CamPos=CAM.CFrame OrigCam=CAM.CameraType CAM.CameraType=Enum.CameraType.Scriptable
+    local rot=CAM.CFrame local vel=Vector3.zero
+    UIS.MouseBehavior=Enum.MouseBehavior.LockCenter
+    fcConn=RS.RenderStepped:Connect(function(dt)
+        if not S.FreeCam then return end
+        local md=Vector3.zero
+        if UIS:IsKeyDown(Enum.KeyCode.W) then md+=rot.LookVector end
+        if UIS:IsKeyDown(Enum.KeyCode.S) then md-=rot.LookVector end
+        if UIS:IsKeyDown(Enum.KeyCode.A) then md-=rot.RightVector end
+        if UIS:IsKeyDown(Enum.KeyCode.D) then md+=rot.RightVector end
+        if UIS:IsKeyDown(Enum.KeyCode.Space) then md+=Vector3.new(0,1,0) end
+        if UIS:IsKeyDown(Enum.KeyCode.LeftControl) then md-=Vector3.new(0,1,0) end
+        vel = md.Magnitude>0 and md.Unit*CamSpd or vel*0.85
+        rot=rot+vel*dt CamPos=CamPos+vel*dt CAM.CFrame=rot
+    end)
+end
+local function stopFC()
+    if fcConn then fcConn:Disconnect() fcConn=nil end
+    CAM.CameraType=OrigCam UIS.MouseBehavior=Enum.MouseBehavior.Default
+    if LP.Character then
+        local hrp=LP.Character:FindFirstChild("HumanoidRootPart")
+        if hrp then CAM.CFrame=hrp.CFrame end
+    end
+end
+
+-- MAIN PANEL
+local mainGui = mk("ScreenGui",{Name="AdminPanel",ResetOnSpawn=false},game.CoreGui)
+local openB = btn(mainGui,"⚙️ ADMIN",{Size=UDim2.new(0,110,0,40),Position=UDim2.new(0,20,0,20),BackgroundColor3=Color3.fromRGB(60,60,85)})
+drag(openB,openB)
+
+local panel = mk("Frame",{Size=UDim2.new(0,300,0,460),Position=UDim2.new(0,20,0,70),BackgroundColor3=Color3.fromRGB(22,22,32),BorderSizePixel=0,Visible=false},mainGui)
+corner(panel,10)
+mk("UIStroke",{Color=Color3.fromRGB(85,85,125),Thickness=2},panel)
+
+local hdr = mk("Frame",{Size=UDim2.new(1,0,0,40),BackgroundColor3=Color3.fromRGB(55,55,85),BorderSizePixel=0},panel)
+corner(hdr,10)
+lbl(hdr,"ADMIN PANEL",{Size=UDim2.new(1,0,1,0),TextSize=16})
+drag(panel,hdr)
+
+local scroll = mk("ScrollingFrame",{Size=UDim2.new(1,-20,1,-50),Position=UDim2.new(0,10,0,45),BackgroundTransparency=1,BorderSizePixel=0,CanvasSize=UDim2.new(),AutomaticCanvasSize=Enum.AutomaticSize.Y,ScrollBarThickness=4},panel)
+mk("UIListLayout",{Padding=UDim.new(0,8),SortOrder=Enum.SortOrder.LayoutOrder},scroll)
+
+-- Toggle row
+local function row(txt,cb)
+    local r = mk("Frame",{Size=UDim2.new(1,-10,0,40),BackgroundColor3=Color3.fromRGB(35,35,50),BorderSizePixel=0},scroll)
+    corner(r)
+    lbl(r,txt,{Size=UDim2.new(1,-70,1,0),Position=UDim2.new(0,10,0,0),TextXAlignment=Enum.TextXAlignment.Left})
+    local b = btn(r,"OFF",{Size=UDim2.new(0,55,0,26),Position=UDim2.new(1,-65,0.5,-13),BackgroundColor3=Color3.fromRGB(200,50,50),TextSize=11})
+    local st=false
+    local function set(v) st=v b.Text=v and "ON" or "OFF" b.BackgroundColor3=v and Color3.fromRGB(50,200,80) or Color3.fromRGB(200,50,50) cb(v) end
+    b.MouseButton1Click:Connect(function() set(not st) end)
+    return {Set=set}
+end
+
+-- Slider
+local function slider(txt,mn,mx,def,cb)
+    local c = mk("Frame",{Size=UDim2.new(1,-10,0,60),BackgroundColor3=Color3.fromRGB(35,35,50),BorderSizePixel=0},scroll)
+    corner(c)
+    local l = lbl(c,txt..": "..def,{Size=UDim2.new(1,-20,0,20),Position=UDim2.new(0,10,0,5),TextXAlignment=Enum.TextXAlignment.Left,Font=Enum.Font.GothamBold})
+    local bar = mk("Frame",{Size=UDim2.new(1,-20,0,8),Position=UDim2.new(0,10,0,35),BackgroundColor3=Color3.fromRGB(60,60,80),BorderSizePixel=0},c)
+    corner(bar,4)
+    local fil = mk("Frame",{Size=UDim2.new((def-mn)/(mx-mn),0,1,0),BackgroundColor3=Color3.fromRGB(100,150,255),BorderSizePixel=0},bar)
+    corner(fil,4)
+    local dg=false
+    local function upd(x)
+        local rl = math.clamp((x-bar.AbsolutePosition.X)/bar.AbsoluteSize.X,0,1)
+        local v = math.floor(mn+(mx-mn)*rl)
+        fil.Size=UDim2.new(rl,0,1,0) l.Text=txt..": "..v cb(v)
+    end
+    bar.InputBegan:Connect(function(i) if i.UserInputType==Enum.UserInputType.MouseButton1 or i.UserInputType==Enum.UserInputType.Touch then dg=true upd(i.Position.X) end end)
+    UIS.InputChanged:Connect(function(i) if dg and (i.UserInputType==Enum.UserInputType.MouseMovement or i.UserInputType==Enum.UserInputType.Touch) then upd(i.Position.X) end end)
+    UIS.InputEnded:Connect(function(i) if i.UserInputType==Enum.UserInputType.MouseButton1 or i.UserInputType==Enum.UserInputType.Touch then dg=false end end)
+end
+
+-- Toggle rows
+local flyR = row("✈️ Fly",function(v) S.Fly=v v and startFly() or stopFly() flyF.Set(v) end)
+local ncR  = row("👻 Noclip",function(v) S.Noclip=v v and startNC() or stopNC() ncF.Set(v) end)
+row("👁️ ESP Outline",function(v)
+    S.ESP=v
+    if not v then for _,h in pairs(HL) do h:Destroy() end HL={} end
+end)
+local spR = row("⚡ Speed Boost",function(v) S.Speed=v setSpd(v) spF.Set(v) end)
+row("🦘 Infinite Jump",function(v) S.InfJump=v end)
+row("🎥 Free Cam",function(v)
+    S.FreeCam=v
+    if v then startFC() fcUI.SetVis(true) else stopFC() fcUI.SetVis(false) end
+end)
+
+-- Sliders
+slider("Kecepatan Fly",10,300,FlySpd,function(v) FlySpd=v end)
+slider("Kecepatan Speed",16,300,WalkSpd,function(v) WalkSpd=v if S.Speed then setSpd(true) end end)
+
+-- Floating buttons
+flyF = floatBtn("FlyF","✈️ FLY",UDim2.new(0,20,0,130),function(v) S.Fly=v v and startFly() or stopFly() flyR.Set(v) end)
+ncF  = floatBtn("NcF","👻 NOCLIP",UDim2.new(0,20,0,180),function(v) S.Noclip=v v and startNC() or stopNC() ncR.Set(v) end)
+spF  = floatBtn("SpF","⚡ SPEED",UDim2.new(0,20,0,230),function(v) S.Speed=v setSpd(v) spR.Set(v) end)
+
+-- Free Cam UI
+fcUI = (function()
+    local g = mk("ScreenGui",{Name="FreeCamUI",ResetOnSpawn=false},game.CoreGui)
+    local f = mk("Frame",{Size=UDim2.new(0,210,0,125),Position=UDim2.new(0,20,0,290),BackgroundColor3=Color3.fromRGB(30,30,45),BorderSizePixel=0,Visible=false},g)
+    corner(f,10)
+    lbl(f,"🎥 FREE CAM",{Size=UDim2.new(1,0,0,25),Position=UDim2.new(0,0,0,5),TextSize=13})
+    local sl = lbl(f,"Speed: "..CamSpd,{Size=UDim2.new(1,-20,0,20),Position=UDim2.new(0,10,0,30),TextXAlignment=Enum.TextXAlignment.Left,Font=Enum.Font.Gotham})
+    local bar = mk("Frame",{Size=UDim2.new(1,-20,0,8),Position=UDim2.new(0,10,0,55),BackgroundColor3=Color3.fromRGB(60,60,80),BorderSizePixel=0},f)
+    corner(bar,4)
+    local fil = mk("Frame",{Size=UDim2.new(0.5,0,1,0),BackgroundColor3=Color3.fromRGB(100,150,255),BorderSizePixel=0},bar)
+    corner(fil,4)
+    local dg=false
+    local function upd(x)
+        local rl=math.clamp((x-bar.AbsolutePosition.X)/bar.AbsoluteSize.X,0,1)
+        local v=math.floor(10+190*rl) fil.Size=UDim2.new(rl,0,1,0) sl.Text="Speed: "..v CamSpd=v
+    end
+    bar.InputBegan:Connect(function(i) if i.UserInputType==Enum.UserInputType.MouseButton1 or i.UserInputType==Enum.UserInputType.Touch then dg=true upd(i.Position.X) end end)
+    UIS.InputChanged:Connect(function(i) if dg and (i.UserInputType==Enum.UserInputType.MouseMovement or i.UserInputType==Enum.UserInputType.Touch) then upd(i.Position.X) end end)
+    UIS.InputEnded:Connect(function(i) if i.UserInputType==Enum.UserInputType.MouseButton1 or i.UserInputType==Enum.UserInputType.Touch then dg=false end end)
+    local tp = btn(f,"📍 TELEPORT KE CAM",{Size=UDim2.new(1,-20,0,30),Position=UDim2.new(0,10,0,90),BackgroundColor3=Color3.fromRGB(50,150,200),TextSize=11})
+    tp.MouseButton1Click:Connect(function()
+        if not CamPos or not LP.Character then return end
+        local hrp=LP.Character:FindFirstChild("HumanoidRootPart") if not hrp then return end
+        hrp.CFrame=CFrame.new(CAM.CFrame.Position)*(hrp.CFrame-hrp.CFrame.Position)
+        CAM.CFrame=hrp.CFrame
+    end)
+    drag(f,f)
+    return {SetVis=function(v) f.Visible=v end}
+end)()
+
+-- Toggle panel
+local op=false
+openB.MouseButton1Click:Connect(function() op=not op panel.Visible=op end)
+
+-- Respawn
+LP.CharacterAdded:Connect(function()
+    task.wait(1)
+    if S.Speed then setSpd(true) end
+    if S.Noclip then startNC() end
+    if S.ESP then updESP() end
+end)
+
+print("[ADMIN PANEL] Loaded ✅")
